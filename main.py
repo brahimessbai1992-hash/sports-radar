@@ -25,9 +25,9 @@ def send_telegram(message: str):
     try:
         r = requests.post(url, json=payload, timeout=10)
         r.raise_for_status()
-        print(f"✅ تم الإرسال: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"تم الإرسال: {datetime.now().strftime('%H:%M:%S')}")
     except Exception as e:
-        print(f"❌ خطأ في Telegram: {e}")
+        print(f"خطأ في Telegram: {e}")
 
 # ====== البحث والتحليل ======
 def analyze_sports_trends():
@@ -89,34 +89,34 @@ def analyze_sports_trends():
         return data.get("news", [])
 
     except Exception as e:
-        print(f"❌ خطأ: {e}")
+        print(f"خطأ: {e}")
         return []
 
 # ====== تنسيق الرسالة ======
 def format_message(item: dict) -> str:
     score = item.get("score", 0)
     emoji = "🚨" if score >= 8 else "⚡" if score >= 6 else "📌"
-    return f"""{emoji} *ترند محتمل {score}/10*
-
-📰 *الخبر:* {item.get('headline', '')}
-🌍 *لماذا سيترند:* {item.get('why_trend', '')}
-😂 *فكرة الكارتون:* {item.get('cartoon_idea', '')}
-🎬 *الزاوية الكوميدية:* {item.get('comic_angle', '')}
-⏰ *الأولوية:* {item.get('priority', '')}
-
-_رادار الترند • {datetime.now().strftime('%H:%M')}_"""
+    return (
+        f"{emoji} ترند محتمل {score}/10\n\n"
+        f"الخبر: {item.get('headline', '')}\n"
+        f"لماذا سيترند: {item.get('why_trend', '')}\n"
+        f"فكرة الكارتون: {item.get('cartoon_idea', '')}\n"
+        f"الزاوية الكوميدية: {item.get('comic_angle', '')}\n"
+        f"الأولوية: {item.get('priority', '')}\n\n"
+        f"رادار الترند - {datetime.now().strftime('%H:%M')}"
+    )
 
 # ====== الحلقة الرئيسية ======
 def main():
-    print("🚀 رادار الترند الرياضي يعمل...")
-    send_telegram("✅ *رادار الترند الرياضي* بدأ العمل\!\nسأراقب الأخبار كل 30 دقيقة وأرسل لك ما يستحق\.")
+    print("رادار الترند الرياضي يعمل...")
+    send_telegram("رادار الترند الرياضي بدأ العمل! سأراقب الأخبار كل 30 دقيقة وأرسل لك ما يستحق.")
 
     while True:
-        print(f"\n🔍 [{datetime.now().strftime('%H:%M')}] جاري البحث...")
+        print(f"\n[{datetime.now().strftime('%H:%M')}] جاري البحث...")
         news_list = analyze_sports_trends()
 
         if not news_list:
-            print("😴 لا يوجد ترند قوي حالياً")
+            print("لا يوجد ترند قوي حالياً")
         else:
             for item in news_list:
                 news_hash = hashlib.md5(item.get("headline", "").encode()).hexdigest()
@@ -125,16 +125,8 @@ def main():
                     sent_news_hashes.add(news_hash)
                     time.sleep(2)
 
-        print(f"⏳ الفحص القادم بعد 30 دقيقة...")
+        print("الفحص القادم بعد 30 دقيقة...")
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
     main()
-```
-
----
-
-**ملف 2: `requirements.txt`**
-```
-anthropic
-requests
