@@ -1,4 +1,3 @@
-import anthropic
 import requests
 import json
 import time
@@ -9,12 +8,11 @@ from datetime import datetime, date, timedelta
 # ====== إعدادات ======
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CHECK_INTERVAL = 60 * 60
 MAX_CALLS_PER_DAY = 10
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 sent_news_hashes = set()
 calls_today = 0
 last_call_date = date.today()
@@ -41,44 +39,32 @@ def send_telegram(message: str):
     except Exception as e:
         print(f"خطأ Telegram: {e}")
 
-# ====== جلب الأخبار من NewsAPI (مجاني) ======
+# ====== جلب الأخبار من NewsAPI ======
 def fetch_sports_news():
     try:
-        # وقت آخر ساعتين
         from_time = (datetime.utcnow() - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
-
         url = "https://newsapi.org/v2/everything"
+
         params = {
             "apiKey": NEWS_API_KEY,
-            "q": "football OR soccer OR كرة القدم OR المغرب OR FIFA",
-            "language": "ar",
+            "q": "football OR soccer OR Morocco OR FIFA OR كرة القدم",
             "sortBy": "publishedAt",
             "from": from_time,
             "pageSize": 5
         }
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-
         articles = data.get("articles", [])
-
-        # إذا لم تجد أخبار عربية جرب الإنجليزية
-        if not articles:
-            params["language"] = "en"
-            params["q"] = "football soccer Morocco FIFA surprising shocking"
-            r = requests.get(url, params=params, timeout=10)
-            data = r.json()
-            articles = data.get("articles", [])
 
         if not articles:
             print("لا توجد أخبار جديدة من NewsAPI")
             return ""
 
-        # تجميع العناوين
         headlines = []
         for a in articles[:5]:
             title = a.get("title", "")
             published = a.get("publishedAt", "")
-            if title:
+            if title and title != "[Removed]":
                 headlines.append(f"- {title} ({published})")
 
         return "\n".join(headlines)
@@ -87,7 +73,7 @@ def fetch_sports_news():
         print(f"خطأ NewsAPI: {e}")
         return ""
 
-# ====== تحليل الأخبار عبر Claude (بدون بحث) ======
+# ====== تحليل الأخبار عبر Gemini (مجاني) ======
 def analyze_news(headlines: str):
     global calls_today
     if not check_daily_limit():
@@ -97,40 +83,41 @@ def analyze_news(headlines: str):
 
     try:
         calls_today += 1
-        print(f"طلب Claude {calls_today}/{MAX_CALLS_PER_DAY}")
+        print(f"طلب Gemini {calls_today}/{MAX_CALLS_PER_DAY}")
 
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=400,
-            system="""أنت محلل محتوى كارتوني كوميدي مغربي.
-أعطيك عناوين أخبار رياضية. حدد أفضل خبر يمكن أن يترند في المغرب والعالم العربي.
+        prompt = f"""أنت محلل محتوى كارتوني كوميدي مغربي.
+هذه أحدث الأخبار الرياضية:
+{headlines}
+
+حدد أفضل خبر يمكن أن يترند في المغرب والعالم العربي.
 أرجع JSON فقط بدون أي نص آخر:
-إذا وجد خبر قوي: {"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند", "idea": "فكرة كارتون كوميدية"}
-إذا لم يوجد شيء مثير: {"found": false}""",
-            messages=[{
-                "role": "user",
-                "content": f"هذه أحدث الأخبار الرياضية:\n{headlines}\n\nأي خبر يستحق الكارتون الكوميدي؟"
-            }]
-        )
+إذا وجد خبر قوي: {{"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}}
+إذا لم يوجد شيء مثير: {{"found": false}}"""
 
-        full_text = ""
-        for block in response.content:
-            if hasattr(block, 'text'):
-                full_text += block.text
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 300, "temperature": 0.3}
+        }
 
-        full_text = full_text.strip()
+        r = requests.post(url, json=payload, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+
+        full_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+
         if "{" in full_text:
             start = full_text.index("{")
             end = full_text.rindex("}") + 1
             full_text = full_text[start:end]
 
-        data = json.loads(full_text)
-        if data.get("found") and data.get("score", 0) >= 5:
-            return [data]
+        result = json.loads(full_text)
+        if result.get("found") and result.get("score", 0) >= 5:
+            return [result]
         return []
 
     except Exception as e:
-        print(f"خطأ Claude: {e}")
+        print(f"خطأ Gemini: {e}")
         return []
 
 # ====== تنسيق الرسالة ======
@@ -147,8 +134,8 @@ def format_message(item):
 
 # ====== الحلقة الرئيسية ======
 def main():
-    print("رادار الترند يعمل - NewsAPI + Claude")
-    send_telegram("رادار الترند بدأ العمل - NewsAPI + Claude - فحص كل ساعة")
+    print("رادار الترند يعمل - NewsAPI + Gemini مجاناً")
+    send_telegram("رادار الترند بدأ العمل - NewsAPI + Gemini - مجاني 100%")
 
     while True:
         print(f"\n[{datetime.now().strftime('%H:%M')}] جاري جلب الأخبار...")
@@ -158,7 +145,7 @@ def main():
         if not headlines:
             print("لا توجد أخبار جديدة")
         else:
-            print(f"وجدنا أخبار - نحللها...")
+            print("وجدنا أخبار - نحللها...")
             news_list = analyze_news(headlines)
 
             if not news_list:
