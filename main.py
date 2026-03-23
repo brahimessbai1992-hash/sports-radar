@@ -6,13 +6,26 @@ import os
 from datetime import datetime, date
 
 # ====== إعدادات ======
+MODEL_NAME = "gemini-2.0-flash"
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CHECK_INTERVAL = 60 * 60
 MAX_CALLS_PER_DAY = 10
+HASH_FILE = "sent_hashes.txt"
 
-sent_news_hashes = set()
+# ====== حفظ الهاشات ======
+def get_sent_hashes():
+    if os.path.exists(HASH_FILE):
+        with open(HASH_FILE, "r") as f:
+            return set(f.read().splitlines())
+    return set()
+
+def save_hash(h):
+    with open(HASH_FILE, "a") as f:
+        f.write(h + "\n")
+
+sent_news_hashes = get_sent_hashes()
 calls_today = 0
 last_call_date = date.today()
 
@@ -32,13 +45,17 @@ def check_daily_limit():
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
+        r = requests.post(url, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "Markdown"
+        }, timeout=10)
         r.raise_for_status()
         print(f"تم الإرسال {datetime.now().strftime('%H:%M')}")
     except Exception as e:
         print(f"خطأ Telegram: {e}")
 
-# ====== البحث والتحليل عبر Gemini + Google Search ======
+# ====== البحث والتحليل عبر Gemini ======
 def analyze_sports_trends():
     global calls_today
     if not check_daily_limit():
@@ -46,11 +63,10 @@ def analyze_sports_trends():
 
     try:
         calls_today += 1
-        print(f"طلب Gemini {calls_today}/{MAX_CALLS_PER_DAY}")
-
         now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        print(f"طلب Gemini {calls_today}/{MAX_CALLS_PER_DAY} - {now}")
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
 
         payload = {
             "contents": [{
@@ -59,31 +75,26 @@ def analyze_sports_trends():
 ابحث في الإنترنت الآن عن أحدث خبر رياضي نُشر في آخر ساعتين فقط.
 أولوياتك: المنتخب المغربي، كرة القدم العالمية، فضائح اللاعبين، نتائج مفاجئة.
 تجاهل أي خبر أقدم من ساعتين.
-أرجع JSON فقط بدون أي نص آخر:
-إذا وجد خبر حديث ومثير: {{"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}}
-إذا لم يوجد شيء حديث: {{"found": false}}"""
+أرجع JSON فقط بهذا الهيكل:
+إذا وجد خبر قوي: {{"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية بالدارجة"}}
+إذا لم يوجد شيء حديث ومثير: {{"found": false}}"""
                 }]
             }],
-            "tools": [{"google_search": {}}],
+            "tools": [{"google_search_retrieval": {}}],
             "generationConfig": {
-                "maxOutputTokens": 400,
-                "temperature": 0.3
+                "response_mime_type": "application/json",
+                "temperature": 0.2
             }
         }
 
-        r = requests.post(url, json=payload, timeout=30)
+        r = requests.post(url, json=payload, timeout=40)
         r.raise_for_status()
         data = r.json()
 
-        full_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        raw = data["candidates"][0]["content"]["parts"][0]["text"]
+        result = json.loads(raw)
 
-        if "{" in full_text:
-            start = full_text.index("{")
-            end = full_text.rindex("}") + 1
-            full_text = full_text[start:end]
-
-        result = json.loads(full_text)
-        if result.get("found") and result.get("score", 0) >= 5:
+        if result.get("found") and result.get("score", 0) >= 6:
             return [result]
         return []
 
@@ -94,19 +105,19 @@ def analyze_sports_trends():
 # ====== تنسيق الرسالة ======
 def format_message(item):
     score = item.get("score", 0)
-    emoji = "🚨" if score >= 8 else "⚡" if score >= 6 else "📌"
+    emoji = "🔥" if score >= 8 else "⚡"
     return (
-        f"{emoji} ترند محتمل {score}/10\n\n"
-        f"الخبر: {item.get('headline', '')}\n\n"
-        f"لماذا سيترند: {item.get('why', '')}\n\n"
-        f"فكرة الكارتون: {item.get('idea', '')}\n\n"
-        f"رادار الترند - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"{emoji} *رادار الترند الرياضي {score}/10*\n\n"
+        f"⚽ *الخبر:* {item.get('headline', '')}\n\n"
+        f"🤔 *لماذا سيترند:* {item.get('why', '')}\n\n"
+        f"🎨 *فكرة الكارتون:* {item.get('idea', '')}\n\n"
+        f"🕒 _{datetime.now().strftime('%Y-%m-%d %H:%M')}_"
     )
 
 # ====== الحلقة الرئيسية ======
 def main():
-    print("رادار الترند يعمل - Gemini + Google Search")
-    send_telegram("رادار الترند بدأ العمل - Gemini + Google Search - مجاني 100%")
+    print(f"رادار الترند يعمل - {MODEL_NAME} + Google Search")
+    send_telegram("🚀 *رادار الترند الرياضي* بدأ العمل\nGemini \+ Google Search \- مجاني 100%")
 
     while True:
         print(f"\n[{datetime.now().strftime('%H:%M')}] جاري البحث...")
@@ -120,6 +131,7 @@ def main():
                 if h not in sent_news_hashes:
                     send_telegram(format_message(item))
                     sent_news_hashes.add(h)
+                    save_hash(h)
                     time.sleep(2)
 
         print("الفحص القادم بعد ساعة...")
