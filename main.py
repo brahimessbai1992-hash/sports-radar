@@ -3,12 +3,11 @@ import json
 import time
 import hashlib
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
 # ====== إعدادات ======
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CHECK_INTERVAL = 60 * 60
 MAX_CALLS_PER_DAY = 10
@@ -39,68 +38,40 @@ def send_telegram(message: str):
     except Exception as e:
         print(f"خطأ Telegram: {e}")
 
-# ====== جلب الأخبار من NewsAPI ======
-def fetch_sports_news():
-    try:
-        from_time = (datetime.utcnow() - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
-        url = "https://newsapi.org/v2/everything"
-
-        params = {
-            "apiKey": NEWS_API_KEY,
-            "q": "football OR soccer OR Morocco OR FIFA OR كرة القدم",
-            "sortBy": "publishedAt",
-            "from": from_time,
-            "pageSize": 5
-        }
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        articles = data.get("articles", [])
-
-        if not articles:
-            print("لا توجد أخبار جديدة من NewsAPI")
-            return ""
-
-        headlines = []
-        for a in articles[:5]:
-            title = a.get("title", "")
-            published = a.get("publishedAt", "")
-            if title and title != "[Removed]":
-                headlines.append(f"- {title} ({published})")
-
-        return "\n".join(headlines)
-
-    except Exception as e:
-        print(f"خطأ NewsAPI: {e}")
-        return ""
-
-# ====== تحليل الأخبار عبر Gemini (مجاني) ======
-def analyze_news(headlines: str):
+# ====== البحث والتحليل عبر Gemini + Google Search ======
+def analyze_sports_trends():
     global calls_today
     if not check_daily_limit():
-        return []
-    if not headlines:
         return []
 
     try:
         calls_today += 1
         print(f"طلب Gemini {calls_today}/{MAX_CALLS_PER_DAY}")
 
-        prompt = f"""أنت محلل محتوى كارتوني كوميدي مغربي.
-هذه أحدث الأخبار الرياضية:
-{headlines}
-
-حدد أفضل خبر يمكن أن يترند في المغرب والعالم العربي.
-أرجع JSON فقط بدون أي نص آخر:
-إذا وجد خبر قوي: {{"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}}
-إذا لم يوجد شيء مثير: {{"found": false}}"""
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 300, "temperature": 0.3}
+            "contents": [{
+                "parts": [{
+                    "text": f"""الوقت الحالي: {now}
+ابحث في الإنترنت الآن عن أحدث خبر رياضي نُشر في آخر ساعتين فقط.
+أولوياتك: المنتخب المغربي، كرة القدم العالمية، فضائح اللاعبين، نتائج مفاجئة.
+تجاهل أي خبر أقدم من ساعتين.
+أرجع JSON فقط بدون أي نص آخر:
+إذا وجد خبر حديث ومثير: {{"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}}
+إذا لم يوجد شيء حديث: {{"found": false}}"""
+                }]
+            }],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {
+                "maxOutputTokens": 400,
+                "temperature": 0.3
+            }
         }
 
-        r = requests.post(url, json=payload, timeout=15)
+        r = requests.post(url, json=payload, timeout=30)
         r.raise_for_status()
         data = r.json()
 
@@ -134,29 +105,22 @@ def format_message(item):
 
 # ====== الحلقة الرئيسية ======
 def main():
-    print("رادار الترند يعمل - NewsAPI + Gemini مجاناً")
-    send_telegram("رادار الترند بدأ العمل - NewsAPI + Gemini - مجاني 100%")
+    print("رادار الترند يعمل - Gemini + Google Search")
+    send_telegram("رادار الترند بدأ العمل - Gemini + Google Search - مجاني 100%")
 
     while True:
-        print(f"\n[{datetime.now().strftime('%H:%M')}] جاري جلب الأخبار...")
+        print(f"\n[{datetime.now().strftime('%H:%M')}] جاري البحث...")
+        news_list = analyze_sports_trends()
 
-        headlines = fetch_sports_news()
-
-        if not headlines:
-            print("لا توجد أخبار جديدة")
+        if not news_list:
+            print("لا يوجد ترند قوي حالياً")
         else:
-            print("وجدنا أخبار - نحللها...")
-            news_list = analyze_news(headlines)
-
-            if not news_list:
-                print("لا يوجد ترند قوي حالياً")
-            else:
-                for item in news_list:
-                    h = hashlib.md5(item.get("headline", "").encode()).hexdigest()
-                    if h not in sent_news_hashes:
-                        send_telegram(format_message(item))
-                        sent_news_hashes.add(h)
-                        time.sleep(2)
+            for item in news_list:
+                h = hashlib.md5(item.get("headline", "").encode()).hexdigest()
+                if h not in sent_news_hashes:
+                    send_telegram(format_message(item))
+                    sent_news_hashes.add(h)
+                    time.sleep(2)
 
         print("الفحص القادم بعد ساعة...")
         time.sleep(CHECK_INTERVAL)
