@@ -4,18 +4,22 @@ import json
 import time
 import hashlib
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
+# ====== إعدادات ======
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 CHECK_INTERVAL = 60 * 60
 MAX_CALLS_PER_DAY = 10
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 sent_news_hashes = set()
 calls_today = 0
 last_call_date = date.today()
 
+# ====== حماية الاستهلاك ======
 def check_daily_limit():
     global calls_today, last_call_date
     today = date.today()
@@ -27,6 +31,7 @@ def check_daily_limit():
         return False
     return True
 
+# ====== إرسال Telegram ======
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
@@ -36,31 +41,75 @@ def send_telegram(message: str):
     except Exception as e:
         print(f"خطأ Telegram: {e}")
 
-def analyze_sports_trends():
+# ====== جلب الأخبار من NewsAPI (مجاني) ======
+def fetch_sports_news():
+    try:
+        # وقت آخر ساعتين
+        from_time = (datetime.utcnow() - timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%S')
+
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "apiKey": NEWS_API_KEY,
+            "q": "football OR soccer OR كرة القدم OR المغرب OR FIFA",
+            "language": "ar",
+            "sortBy": "publishedAt",
+            "from": from_time,
+            "pageSize": 5
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+
+        articles = data.get("articles", [])
+
+        # إذا لم تجد أخبار عربية جرب الإنجليزية
+        if not articles:
+            params["language"] = "en"
+            params["q"] = "football soccer Morocco FIFA surprising shocking"
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+            articles = data.get("articles", [])
+
+        if not articles:
+            print("لا توجد أخبار جديدة من NewsAPI")
+            return ""
+
+        # تجميع العناوين
+        headlines = []
+        for a in articles[:5]:
+            title = a.get("title", "")
+            published = a.get("publishedAt", "")
+            if title:
+                headlines.append(f"- {title} ({published})")
+
+        return "\n".join(headlines)
+
+    except Exception as e:
+        print(f"خطأ NewsAPI: {e}")
+        return ""
+
+# ====== تحليل الأخبار عبر Claude (بدون بحث) ======
+def analyze_news(headlines: str):
     global calls_today
     if not check_daily_limit():
+        return []
+    if not headlines:
         return []
 
     try:
         calls_today += 1
-        print(f"طلب {calls_today}/{MAX_CALLS_PER_DAY}")
-
-        now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        print(f"طلب Claude {calls_today}/{MAX_CALLS_PER_DAY}")
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=500,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            system="""أنت محلل أخبار رياضية متخصص في الجمهور المغربي والعربي.
-مهمتك: ابحث عن خبر رياضي نُشر في آخر ساعتين فقط ويمكن أن يترند.
-تجاهل تماماً أي خبر أقدم من ساعتين.
-أولوياتك: المنتخب المغربي، كرة القدم العالمية، فضائح اللاعبين، نتائج مفاجئة.
+            max_tokens=400,
+            system="""أنت محلل محتوى كارتوني كوميدي مغربي.
+أعطيك عناوين أخبار رياضية. حدد أفضل خبر يمكن أن يترند في المغرب والعالم العربي.
 أرجع JSON فقط بدون أي نص آخر:
-إذا وجد خبر حديث: {"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}
-إذا لم يوجد شيء حديث: {"found": false}""",
+إذا وجد خبر قوي: {"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند", "idea": "فكرة كارتون كوميدية"}
+إذا لم يوجد شيء مثير: {"found": false}""",
             messages=[{
                 "role": "user",
-                "content": f"الوقت الحالي: {now}. ابحث عن أخبار رياضية نُشرت بعد الساعة {datetime.now().strftime('%H:%M')} فقط. لا تذكر أي خبر قديم."
+                "content": f"هذه أحدث الأخبار الرياضية:\n{headlines}\n\nأي خبر يستحق الكارتون الكوميدي؟"
             }]
         )
 
@@ -81,9 +130,10 @@ def analyze_sports_trends():
         return []
 
     except Exception as e:
-        print(f"خطأ: {e}")
+        print(f"خطأ Claude: {e}")
         return []
 
+# ====== تنسيق الرسالة ======
 def format_message(item):
     score = item.get("score", 0)
     emoji = "🚨" if score >= 8 else "⚡" if score >= 6 else "📌"
@@ -95,23 +145,31 @@ def format_message(item):
         f"رادار الترند - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
 
+# ====== الحلقة الرئيسية ======
 def main():
-    print("رادار الترند يعمل...")
-    send_telegram("رادار الترند بدأ العمل - فحص كل ساعة - أخبار آخر ساعتين فقط")
+    print("رادار الترند يعمل - NewsAPI + Claude")
+    send_telegram("رادار الترند بدأ العمل - NewsAPI + Claude - فحص كل ساعة")
 
     while True:
-        print(f"\n[{datetime.now().strftime('%H:%M')}] جاري البحث...")
-        news_list = analyze_sports_trends()
+        print(f"\n[{datetime.now().strftime('%H:%M')}] جاري جلب الأخبار...")
 
-        if not news_list:
-            print("لا يوجد ترند حالياً")
+        headlines = fetch_sports_news()
+
+        if not headlines:
+            print("لا توجد أخبار جديدة")
         else:
-            for item in news_list:
-                h = hashlib.md5(item.get("headline", "").encode()).hexdigest()
-                if h not in sent_news_hashes:
-                    send_telegram(format_message(item))
-                    sent_news_hashes.add(h)
-                    time.sleep(2)
+            print(f"وجدنا أخبار - نحللها...")
+            news_list = analyze_news(headlines)
+
+            if not news_list:
+                print("لا يوجد ترند قوي حالياً")
+            else:
+                for item in news_list:
+                    h = hashlib.md5(item.get("headline", "").encode()).hexdigest()
+                    if h not in sent_news_hashes:
+                        send_telegram(format_message(item))
+                        sent_news_hashes.add(h)
+                        time.sleep(2)
 
         print("الفحص القادم بعد ساعة...")
         time.sleep(CHECK_INTERVAL)
