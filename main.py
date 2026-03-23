@@ -45,12 +45,23 @@ def analyze_sports_trends():
         calls_today += 1
         print(f"طلب {calls_today}/{MAX_CALLS_PER_DAY}")
 
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
+
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=500,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            system="أنت محلل أخبار رياضية. ابحث عن أهم خبر رياضي الآن يمكن أن يترند في المغرب. أرجع JSON فقط بهذا الشكل بدون أي نص آخر: {\"found\": true, \"score\": 8, \"headline\": \"الخبر\", \"why\": \"السبب\", \"idea\": \"فكرة كارتون\"} أو {\"found\": false} إذا لم يوجد شيء مثير.",
-            messages=[{"role": "user", "content": f"ابحث عن أخبار رياضية الآن. {datetime.now().strftime('%Y-%m-%d %H:%M')}"}]
+            system="""أنت محلل أخبار رياضية متخصص في الجمهور المغربي والعربي.
+مهمتك: ابحث عن خبر رياضي نُشر في آخر ساعتين فقط ويمكن أن يترند.
+تجاهل تماماً أي خبر أقدم من ساعتين.
+أولوياتك: المنتخب المغربي، كرة القدم العالمية، فضائح اللاعبين، نتائج مفاجئة.
+أرجع JSON فقط بدون أي نص آخر:
+إذا وجد خبر حديث: {"found": true, "score": 8, "headline": "الخبر", "why": "لماذا سيترند في المغرب", "idea": "فكرة كارتون كوميدية"}
+إذا لم يوجد شيء حديث: {"found": false}""",
+            messages=[{
+                "role": "user",
+                "content": f"الوقت الحالي: {now}. ابحث عن أخبار رياضية نُشرت بعد الساعة {datetime.now().strftime('%H:%M')} فقط. لا تذكر أي خبر قديم."
+            }]
         )
 
         full_text = ""
@@ -59,7 +70,6 @@ def analyze_sports_trends():
                 full_text += block.text
 
         full_text = full_text.strip()
-        # تنظيف JSON
         if "{" in full_text:
             start = full_text.index("{")
             end = full_text.rindex("}") + 1
@@ -82,12 +92,12 @@ def format_message(item):
         f"الخبر: {item.get('headline', '')}\n\n"
         f"لماذا سيترند: {item.get('why', '')}\n\n"
         f"فكرة الكارتون: {item.get('idea', '')}\n\n"
-        f"رادار الترند - {datetime.now().strftime('%H:%M')}"
+        f"رادار الترند - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     )
 
 def main():
     print("رادار الترند يعمل...")
-    send_telegram("رادار الترند بدأ العمل - فحص كل ساعة - حد يومي 10 طلبات")
+    send_telegram("رادار الترند بدأ العمل - فحص كل ساعة - أخبار آخر ساعتين فقط")
 
     while True:
         print(f"\n[{datetime.now().strftime('%H:%M')}] جاري البحث...")
